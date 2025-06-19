@@ -1,10 +1,18 @@
-import streamlit as st, pickle, numpy as np, pandas as pd, json, shap
+import streamlit as st, pickle, pandas as pd, json, shap
 
 # Loading the model
 model = pickle.load(open("model_xgb.sv",'rb'))
 rent_model = pickle.load(open("rent_model_xgb.sv",'rb'))
 with open("category_mappings.json") as f:
     category_mappings = json.load(f)
+
+@st.cache_resource
+def buy_explainer():
+    return shap.Explainer(model)
+
+@st.cache_resource
+def rent_explainer():
+    return shap.Explainer(rent_model)
 
 st.set_page_config(page_title="Cena mieszkań w Polsce")
 st.title("Cena mieszkań w Polsce")
@@ -165,14 +173,30 @@ with t_predictor:
         "hasStorageRoom": "category"
     })
 
+    encoded_df = input_df.copy()
     for col in ["city", "type", "ownership", "buildingMaterial", "condition", "hasParkingSpace", "hasBalcony", "hasElevator", "hasSecurity", "hasStorageRoom"]:
         input_df[col] = pd.Categorical(input_df[col], categories=category_mappings[col])
+        encoded_df[col] = encoded_df[col].cat.codes
     
     buy_pred = model.predict(input_df)
     rent_pred = rent_model.predict(input_df)
 
     st.write(f"### Kupno: {buy_pred[0]:,.2f}zł")
     st.write(f"### Wynajem: {rent_pred[0]:,.2f}zł/miesiąc")
+
+    buy_explanation = buy_explainer()(encoded_df)[0]
+    rent_explanation = rent_explainer()(encoded_df)[0]
+
+    shap_df = pd.DataFrame({
+        'Cecha': input_df.columns,
+        'Kupno': buy_explanation.values,
+        'Wynajem': rent_explanation.values
+    })
+
+    with st.expander("Wpływ cech na cenę mieszkań"):
+        st.dataframe(shap_df.style
+                     .format({'Kupno': "{:+,.2f} zł", 'Wynajem': "{:+,.2f} zł/miesiąc"})
+                     .map(lambda x: 'color: green' if x < 0 else 'color: red', subset=['Kupno', 'Wynajem']), use_container_width=True)
 
 with t_input:
     file = st.file_uploader("Wgraj plik CSV z danymi mieszkań", type=["csv"])
